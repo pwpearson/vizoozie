@@ -1,0 +1,165 @@
+#!/usr/bin/env python
+import getopt, sys, re, os.path, argparse
+from xml.dom.minidom import parseString
+
+VERSION='0.2'
+
+class VizOozie(object):
+
+    properties = {}
+    propertyFilename = ''
+    
+    def loadDefaultProperties(self):
+        self.properties["java"] = "dodgerblue1"
+        self.properties["map-reduce"] = "forestgreen"
+        self.properties["fs"] = "gray54"
+        self.properties["pig"] = "bisque"
+        self.properties["ssh"] = "khaki"
+        self.properties["sub-workflow"] = "palegoldenrod"
+        self.properties["shell"] = "orchid"
+        self.properties["hive"] = "coral"
+        self.properties["sqoop"] = "chartreuse"
+
+    def loadProperties(self):
+        if len(self.propertyFilename) == 0:
+            self.loadDefaultProperties()
+        else: 
+            if not os.path.isfile(self.propertyFilename):
+                loadDefaultProperties(self)
+            else:
+                with open(self.propertyFilename) as f:
+                    for line in f:
+                        key, val = line.split('=')
+                        self.properties[key] = val
+
+    def getName(self, node):
+        attr = self.getAttribute(node, "name")
+        return attr
+
+    def getTo(self, node):
+        attr = self.getAttribute(node, "to")
+        return attr
+
+    def getAttribute(self, node, attributeName):
+        attr = node.getAttribute(attributeName)
+        return attr
+
+    def getOK(self, node):
+        ok = node.getElementsByTagName("ok")[0]
+        return ok
+
+    def processHeader(self, name):
+        output = "digraph{\nsize = \"8,8\";ratio=fill;\ngraph[fontname=\"Arial\", fontsize=20]\nnode[fontname=\"Arial\",fontsize=14];labelloc=\"t\";label=\"" + name + "\";\n"
+        return output
+
+    def processStart(self, doc):
+        output = ''
+        start = doc.getElementsByTagName("start")[0]
+        to = self.getTo(start)
+        output = '\n' + "start -> " + to.replace('-', '_') + ";\n"
+        return output
+
+    def processAction(self, doc):
+        output = ''
+        for node in doc.getElementsByTagName("action"):
+            name = self.getName(node)
+            color = "white"
+            action = "unknown"
+            for key, value in self.properties.iteritems():
+                if len(node.getElementsByTagName(key)) != 0:
+                    color = value
+                    action = key
+                    break
+            ok = self.getOK(node)
+            to = self.getTo(ok)
+            output += '\n'+name.replace('-', '_') + " [shape=box,style=filled,xlabel=\"" + action + "\",color=" + color + "];\n"
+            output += '\n'+name.replace('-', '_') + " -> " + to.replace('-', '_') + ";\n"
+        return output
+
+    def processFork(self, doc):
+        output = ''
+        for node in doc.getElementsByTagName("fork"):
+            name = self.getName(node)
+            output += '\n' + name.replace('-', '_') + " [shape=octagon];\n"
+            for path in node.getElementsByTagName("path"):
+                start = path.getAttribute("start")
+                output += '\n' + name.replace('-', '_') + " -> " + start.replace('-', '_') + ";\n"
+        return output
+
+
+    def processJoin(self, doc):
+        output = ''
+        for node in doc.getElementsByTagName("join"):
+            name = self.getName(node)
+            to = self.getTo(node)
+            output += '\n' + name.replace('-', '_') + " [shape=octagon];\n"
+            output += '\n' + name.replace('-', '_') + " -> " + to.replace('-', '_') + ";\n"
+        return output
+
+
+    def processDecision(self, doc):
+        output = ''
+        for node in doc.getElementsByTagName("decision"):
+            name = self.getName(node)
+            switch = node.getElementsByTagName("switch")[0]
+            output += '\n' + name.replace('-', '_') + " [shape=diamond];\n"
+            for case in switch.getElementsByTagName("case"):
+                to = case.getAttribute("to")
+                caseValue = case.childNodes[0].nodeValue.replace('"', '')
+                output += '\n' + name.replace('-', '_') + " -> " + to.replace('-', '_') + "[style=bold,label=\"" + caseValue + "\",fontsize=20];\n"
+
+            default = switch.getElementsByTagName("default")[0]
+            to = default.getAttribute("to")
+            output += '\n' + name.replace('-', '_') + " -> " + to.replace('-', '_') + "[style=dotted,label=\"default\",fontsize=20];\n"
+        return output
+
+
+    def processCloseTag(self):
+        output = '\n' + "}"
+        return output
+
+
+    def convertWorkflowXMLToDOT(self, input_str, name):
+        self.loadProperties()
+        doc = parseString(input_str)
+        output = self.processHeader(name)
+        output += self.processStart(doc)
+        output += self.processAction(doc)
+        output += self.processFork(doc)
+        output += self.processJoin(doc)
+        output += self.processDecision(doc)
+        output += self.processCloseTag()
+        return output
+
+def main():
+
+    parser = argparse.ArgumentParser(description="Utility to to parse Oozie workflow.xml files and output a GraphViz DOT file")
+    parser.add_argument("-p", "--propertyfile", help="Pathname of property file to use")
+    parser.add_argument("-f", "--inputfile", help="workflow.xml input filename")
+    parser.add_argument("-o", "--outputfile", help="GraphViz DOT output filename")
+    parser.add_argument("-l", "--label", help="Label to use in the output", default="oozie workflow")
+    parser.add_argument("-v", "--verbosity", action="count", default=0, help="Increase Output Verbosity. CAUTION verbose output goes to stdout.")
+    args = parser.parse_args()
+
+    if (args.inputfile):
+        inputFile = open(args.inputfile, 'r')
+        input_str = inputFile.read()
+    else:
+        input_str = sys.stdin.read()
+
+    if (args.propertyfile):
+        propertyFilename = args.propertyfile
+  	
+    vizoozie = VizOozie()
+        
+    output = vizoozie.convertWorkflowXMLToDOT(input_str, args.label)
+
+    if (args.outputfile):
+        outputFile = open(args.outputfile, 'w')
+        outputFile.write(str(output))
+        outputFile.close()
+    else:
+        print(str(output))
+
+if __name__ == "__main__":
+    main()
